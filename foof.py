@@ -161,8 +161,9 @@ class FOOF(torch.optim.Optimizer):
                     state = self.state[p]
                     if len(state) == 0:
                         state["momentum"] = torch.zeros_like(p, dtype=torch.float32)
-                        state["cov_ema"] = torch.eye(p.size(0), device=p.device, dtype=torch.float32)
-                        state["mean_ema"] = torch.zeros(p.size(0), device=p.device, dtype=torch.float32)
+                        in_dim = p.size(1)
+                        state["cov_ema"] = torch.eye(in_dim, device=p.device, dtype=torch.float32)
+                        state["mean_ema"] = torch.zeros(in_dim, device=p.device, dtype=torch.float32)
 
                     owner = self.param_to_module[p]
                     if owner._input_cov_full is None:
