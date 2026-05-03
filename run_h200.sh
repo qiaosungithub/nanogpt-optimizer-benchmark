@@ -67,7 +67,11 @@ fi
 
 mkdir -p "/data/scratch-oc40/$USER/slurm"
 
-CMD_ARGS_STR=$(printf "%q " "$@")
+if [ "$#" -gt 0 ]; then
+  CMD_ARGS_STR=$(printf "%q " "$@")
+else
+  CMD_ARGS_STR=""
+fi
 SBATCH_MEM="${SBATCH_MEM:-800G}"
 SBATCH_CPUS="${SBATCH_CPUS:-32}"
 SBATCH_GPUS="${SBATCH_GPUS:-8}"

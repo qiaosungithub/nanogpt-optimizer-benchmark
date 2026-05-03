@@ -281,13 +281,16 @@ val_tokens = 20 * 524288
 batch_size = 8 * 64 * 1024
 mbs = 64
 log_per_step = env_int("LOG_PER_STEP", 100)
+train_print_every = env_int("TRAIN_PRINT_EVERY", 10)
 val_inputs, val_targets = next(distributed_data_generator("data/fineweb10B/fineweb_val_*.bin", val_tokens))
 
 model = GPT(vocab_size=50304, num_layers=12, model_dim=768).cuda()
 model.compile(dynamic=False)
 
 
-num_trials = int(sys.argv[-1]) if len(sys.argv) > 1 else 1
+num_trials = 1
+if len(sys.argv) > 1 and sys.argv[-1].strip() != "":
+    num_trials = int(sys.argv[-1])
 matrix_opt = load_matrix_optimizer_name()
 train_steps = 3375
 run_config = {
@@ -298,6 +301,7 @@ run_config = {
     "train_steps": train_steps,
     "val_every": 125,
     "log_per_step": log_per_step,
+    "train_print_every": train_print_every,
     "num_trials": num_trials,
     "foof_config": os.environ.get("FOOF_CONFIG"),
     "muon_config": os.environ.get("MUON_CONFIG"),
@@ -452,8 +456,9 @@ for trial_idx in range(num_trials):
             opt.step()
         model.zero_grad(set_to_none=True)
         approx_training_time = training_time + (time.perf_counter() - t0)
-        print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time:.3f}s"
-               + f" step_avg:{1000*approx_training_time/(step + 1):.2f}ms", console=True, log=False)
+        if (step + 1) % train_print_every == 0:
+            print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time:.3f}s"
+                   + f" step_avg:{1000*approx_training_time/(step + 1):.2f}ms", console=True, log=False)
 
 logger.finish()
 dist.destroy_process_group()
