@@ -91,16 +91,17 @@ def foof_update(
     cov_ema.lerp_(input_cov, 1 - beta)
     mean_ema.lerp_(input_mean, 1 - beta)
 
-    m_t = grad.lerp_(momentum, beta) if nesterov else momentum
-    d, m_dim = m_t.shape
+    m_raw = grad.lerp_(momentum, beta) if nesterov else momentum
+    M_t = m_raw.mT
+    d, m_dim = M_t.shape
     mean_norm_sq = torch.dot(mean_ema, mean_ema)
     tr_cov = torch.trace(cov_ema)
     sigma_sq = torch.clamp((tr_cov - mean_norm_sq) / d, min=eps)
 
-    p_t = _surrogate_inv(m_t, mean_ema, sigma_sq, eps=eps)
+    p_t = _surrogate_inv(M_t, mean_ema, sigma_sq, eps=eps)
     p_norm = torch.norm(p_t)
     alpha_t = alpha_mult / (p_norm / (min(d, m_dim) ** 0.5) + eps)
-    t_t = alpha_t * m_t
+    t_t = alpha_t * M_t
 
     u = torch.zeros_like(t_t)
     for _ in range(fw_steps):
@@ -113,8 +114,9 @@ def foof_update(
         gamma = torch.clamp(num / den, 0.0, 1.0)
         u = u + gamma * d_t
 
-    u *= max(1, grad.size(-1) / grad.size(-2)) ** 0.5
-    return u
+    update = u.mT
+    update *= max(1, m_dim / d) ** 0.5
+    return update
 
 
 def collect_foof_named_params(model):
