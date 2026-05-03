@@ -1,6 +1,9 @@
 run in bash:
 ```
-cd /data/scratch-oc40/sqa/work/nanogpt-optimizer-benchmark && DATA_ROOT=/data/scratch-oc40/sqa/work SBATCH_GPUS=8 ./run_h200.sh he muon
+# H200 running
+DATA_ROOT=/data/scratch-oc40/sqa/work SBATCH_GPUS=8 ./run_h200.sh he foof
+# H100 running
+DATA_ROOT=/data/scratch-oc40/sqa/work ./run_h100.sh foof
 ```
 
 set hyperparameters in run_muon.sh and run_foof.sh

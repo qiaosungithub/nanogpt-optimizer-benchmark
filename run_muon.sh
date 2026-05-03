@@ -24,5 +24,6 @@ MUON_NESTEROV="${MUON_NESTEROV:-true}"
 
 export MUON_CONFIG="{\"lr\":${MUON_LR},\"weight_decay\":${MUON_WEIGHT_DECAY},\"mu\":${MUON_MU},\"nesterov\":${MUON_NESTEROV}}"
 export MATRIX_OPT="muon"
+export WANDB_NOTES="muon baseline"
 
 torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" train_gpt_simple.py "$@"
