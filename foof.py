@@ -29,6 +29,8 @@ class FoofConfig:
     alpha_mult: float = 1.0
     nesterov: bool = True
     eps: float = 1e-12
+    fw_ns_variant: str = "poly5"
+    fw_ns_steps: int = 12
 
 
 @dataclass
@@ -53,6 +55,28 @@ def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
     if G.size(-2) > G.size(-1):
         X = X.mT
     return X
+
+
+def zeropower_via_newtonschulz_basic(G: Tensor, steps: int = 12) -> Tensor:
+    assert G.ndim >= 2
+    X = G.bfloat16()
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    for _ in range(steps):
+        A = X @ X.mT
+        X = 1.5 * X - 0.5 * (A @ X)
+    if G.size(-2) > G.size(-1):
+        X = X.mT
+    return X
+
+
+def ns_orthogonalize(G: Tensor, variant_id: int, steps: int) -> Tensor:
+    if variant_id == 0:
+        return zeropower_via_newtonschulz5(G)
+    if variant_id == 1:
+        return zeropower_via_newtonschulz_basic(G, steps=steps)
+    raise ValueError(f"Unsupported NS variant id: {variant_id}. Expected 0(poly5) or 1(basic).")
 
 
 @torch.compile
@@ -86,6 +110,8 @@ def foof_update(
     fw_steps: int,
     alpha_mult: float,
     eps: float,
+    fw_ns_variant_id: int,
+    fw_ns_steps: int,
 ):
     momentum.lerp_(grad, 1 - beta)
     cov_ema.lerp_(input_cov, 1 - beta)
@@ -106,7 +132,7 @@ def foof_update(
     u = torch.zeros_like(t_t)
     for _ in range(fw_steps):
         r = t_t - cov_ema @ u
-        s = zeropower_via_newtonschulz5(r)
+        s = ns_orthogonalize(r, fw_ns_variant_id, fw_ns_steps)
         d_t = s - u
         num = torch.sum(r * d_t)
         cd = cov_ema @ d_t
@@ -131,6 +157,9 @@ class FOOF(torch.optim.Optimizer):
     def __init__(self, named_params, config: FoofConfig):
         named_params = list(named_params)
         assert len(named_params) >= 1
+        if config.fw_ns_variant not in ("poly5", "basic"):
+            raise ValueError("FoofConfig.fw_ns_variant must be 'poly5' or 'basic'")
+        fw_ns_variant_id = 0 if config.fw_ns_variant == "poly5" else 1
         params = [p for _, p in named_params]
         params = sorted(params, key=lambda x: x.size(), reverse=True)
         self.param_to_module = {p: module for module, p in named_params}
@@ -145,6 +174,8 @@ class FOOF(torch.optim.Optimizer):
             alpha_mult=config.alpha_mult,
             nesterov=config.nesterov,
             eps=config.eps,
+            fw_ns_variant_id=fw_ns_variant_id,
+            fw_ns_steps=config.fw_ns_steps,
         )
         super().__init__(params, defaults)
 
@@ -190,6 +221,8 @@ class FOOF(torch.optim.Optimizer):
                             fw_steps=group["fw_steps"],
                             alpha_mult=group["alpha_mult"],
                             eps=group["eps"],
+                            fw_ns_variant_id=group["fw_ns_variant_id"],
+                            fw_ns_steps=group["fw_ns_steps"],
                         )
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update, alpha=-group["lr"])
