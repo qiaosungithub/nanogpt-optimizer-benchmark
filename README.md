@@ -13,6 +13,12 @@ python data/cached_fineweb10B.py 40  # downloads 4B training tokens
 torchrun --standalone --nproc_per_node=$(nvidia-smi -L | wc -l) records/track_3_optimization/train_gpt_simple.py
 ```
 
+If you plan to use W&B logging, also install:
+
+```bash
+pip install wandb
+```
+
 Note: [Beware that](https://github.com/KellerJordan/modded-nanogpt/issues/268) on A100, using `torch==2.10` with `torch.compile` enabled will lead to `nan`s.
 
 ## This Repo Layout
@@ -23,6 +29,8 @@ This standalone repo contains only `records/track_3_optimization` from `modded-n
 - `foof.py`: PyTorch implementations of `FOOF` and `Muon` matrix optimizers, plus `HookedLinear` activation-stat hooks.
 - `run_foof.sh`: convenience launcher for FOOF experiments.
 - `run_muon.sh`: convenience launcher for Muon experiments.
+- `run_h100.sh`: local multi-GPU launcher with staging (H100-style workflow).
+- `run_h200.sh`: Slurm launcher with staging (H200-style workflow).
 - `results/`: logs and run artifacts.
 
 ## Optimizer Choice (Muon or FOOF)
@@ -56,6 +64,63 @@ Run Muon:
 ```
 
 Both scripts auto-detect GPU count (`NPROC_PER_NODE`) and call `torchrun`.
+
+### H100/H200 infra launchers
+
+Local staged launch (H100-style):
+
+```bash
+./run_h100.sh foof
+./run_h100.sh muon 3
+```
+
+Slurm staged launch (H200-style):
+
+```bash
+./run_h200.sh he foof
+./run_h200.sh csail muon 3
+```
+
+Useful env vars:
+
+- `DATA_ROOT`: location of FineWeb shards (either a folder containing `fineweb10B/` or one containing `fineweb_train_*.bin` directly)
+- `LOG_PER_STEP`: W&B logging cadence (default `100`)
+- `GPU_FREE_MEM_MB`: local GPU free-memory threshold for `run_h100.sh` (default `20000`)
+- `DOWN_NODES`, `SBATCH_MEM`, `SBATCH_CPUS`, `SBATCH_GPUS`, `SBATCH_TIME`: Slurm tuning for `run_h200.sh`
+
+### Weights & Biases logging
+
+Training logs to W&B by default (rank 0 only) through `logging_util.py`.
+
+Setup:
+
+```bash
+cp config.sh.example config.sh
+# edit config.sh and set WANDB_API_KEY
+```
+
+Then run as usual:
+
+```bash
+./run_foof.sh
+./run_muon.sh
+```
+
+Disable W&B for a run:
+
+```bash
+WANDB_ENABLE=0 ./run_foof.sh
+```
+
+Logging cadence is controlled by `LOG_PER_STEP` (default `100`), i.e. scalar metrics are logged every 100 training steps instead of every step.
+
+Logged metrics include:
+
+- `train/loss`, `val/loss`
+- LR curves: `lr/adam_embed`, `lr/adam_proj`, `lr/adam_other`, `lr/matrix`
+- Gradient norms: `grad/global_l2`, `grad/matrix_l2`
+- Activation stats from representative layers: `act/*/(mean_abs|rms|std)`
+- Progress/time: `progress/step`, `progress/tokens_seen`, `time/*`
 
 ## Config via Environment Variables
 

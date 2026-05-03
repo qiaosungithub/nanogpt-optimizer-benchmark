@@ -12,6 +12,7 @@ with open(sys.argv[0]) as f:
     code = f.read() # read the code of this file ASAP, for logging
 import uuid
 import time
+import math
 from pathlib import Path
 
 import torch
@@ -22,6 +23,7 @@ import torch.distributed as dist
 
 from foof import FOOF, FoofConfig, HookedLinear, collect_foof_named_params
 from foof import Muon, MuonConfig
+from logging_util import ExperimentLogger
 
 
 def load_foof_config() -> FoofConfig:
@@ -42,6 +44,64 @@ def load_muon_config() -> MuonConfig:
 
 def load_matrix_optimizer_name() -> str:
     return os.environ.get("MATRIX_OPT", "foof").strip().lower()
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return int(raw)
+
+
+def grad_l2_norm(params) -> float:
+    total = 0.0
+    for p in params:
+        if p.grad is None:
+            continue
+        grad = p.grad.detach().float()
+        total += float(grad.square().sum().item())
+    return math.sqrt(total)
+
+
+def collect_lrs(optimizer1: AdamW, optimizer2) -> dict[str, float]:
+    return {
+        "lr/adam_embed": float(optimizer1.param_groups[0]["lr"]),
+        "lr/adam_proj": float(optimizer1.param_groups[1]["lr"]),
+        "lr/adam_other": float(optimizer1.param_groups[2]["lr"]),
+        "lr/matrix": float(optimizer2.param_groups[0]["lr"]),
+    }
+
+
+def _hooked_linear_stats(module: HookedLinear) -> tuple[float, float, float] | None:
+    if module._input_mean is None or module._input_cov_full is None:
+        return None
+    mean = module._input_mean
+    cov = module._input_cov_full
+    dim = mean.numel()
+    mean_abs = mean.abs().mean().item()
+    second_moment = (torch.trace(cov) / dim).item()
+    mean_sq = mean.square().mean().item()
+    var = max(0.0, second_moment - mean_sq)
+    return mean_abs, math.sqrt(max(0.0, second_moment)), math.sqrt(var)
+
+
+def collect_activation_metrics(model) -> dict[str, float]:
+    metrics = {}
+    points = {
+        "act/attn_q": model.blocks[0].attn.q,
+        "act/attn_proj": model.blocks[0].attn.proj,
+        "act/mlp_fc": model.blocks[0].mlp.fc,
+        "act/mlp_proj": model.blocks[0].mlp.proj,
+    }
+    for prefix, module in points.items():
+        stats = _hooked_linear_stats(module)
+        if stats is None:
+            continue
+        mean_abs, rms, std = stats
+        metrics[f"{prefix}/mean_abs"] = mean_abs
+        metrics[f"{prefix}/rms"] = rms
+        metrics[f"{prefix}/std"] = std
+    return metrics
 
 
 ########################################
@@ -220,6 +280,7 @@ print0("="*100)
 val_tokens = 20 * 524288
 batch_size = 8 * 64 * 1024
 mbs = 64
+log_per_step = env_int("LOG_PER_STEP", 100)
 val_inputs, val_targets = next(distributed_data_generator("data/fineweb10B/fineweb_val_*.bin", val_tokens))
 
 model = GPT(vocab_size=50304, num_layers=12, model_dim=768).cuda()
@@ -227,16 +288,28 @@ model.compile(dynamic=False)
 
 
 num_trials = int(sys.argv[-1]) if len(sys.argv) > 1 else 1
+matrix_opt = load_matrix_optimizer_name()
+train_steps = 3375
+run_config = {
+    "matrix_opt": matrix_opt,
+    "world_size": dist.get_world_size(),
+    "batch_size": batch_size,
+    "mbs": mbs,
+    "train_steps": train_steps,
+    "val_every": 125,
+    "log_per_step": log_per_step,
+    "num_trials": num_trials,
+    "foof_config": os.environ.get("FOOF_CONFIG"),
+    "muon_config": os.environ.get("MUON_CONFIG"),
+}
+logger = ExperimentLogger(dist.get_rank(), log_per_step, run_config)
 
-for _ in range(num_trials):
+for trial_idx in range(num_trials):
 
 
     ########################################
     #       Init & Optim Hyperparams       #
     ########################################
-
-    # we want to minimize this while still reaching 3.28 val loss
-    train_steps = 3375
 
     # initialize model parameters
     for name, p in model.named_parameters():
@@ -260,7 +333,6 @@ for _ in range(num_trials):
                         dict(params=[model.proj.weight], lr=1/320),
                         dict(params=[p for p in model.parameters() if p.ndim < 2], lr=0.01)],
                        betas=(0.8, 0.95), eps=1e-10, weight_decay=0, fused=True)
-    matrix_opt = load_matrix_optimizer_name()
     if matrix_opt == "foof":
         foof_config = load_foof_config()
         optimizer2 = FOOF(collect_foof_named_params(model), config=foof_config)
@@ -305,6 +377,7 @@ for _ in range(num_trials):
     dist.barrier()
     t0 = time.perf_counter()
     for step in range(train_steps + 1):
+        global_step = trial_idx * (train_steps + 1) + step
 
         # --------------- VALIDATION SECTION -----------------
         if step == train_steps or step % 125 == 0:
@@ -324,6 +397,17 @@ for _ in range(num_trials):
             val_loss /= val_tokens
             print0(f"step:{step}/{train_steps} val_loss:{val_loss:.5f} train_time:{training_time:.3f}s"
                    + f" step_avg:{1000*step_avg:.2f}ms", console=True)
+            logger.log(
+                global_step,
+                {
+                    "trial": trial_idx,
+                    "val/loss": val_loss,
+                    "time/train_seconds": training_time,
+                    "time/val_interval_ms": 1000 * step_avg,
+                    "progress/step": step,
+                },
+                force=(step == train_steps),
+            )
             model.train()
             # start the clock again
             dist.barrier()
@@ -334,15 +418,36 @@ for _ in range(num_trials):
 
         # --------------- TRAINING SECTION -----------------
         inputs, targets = next(train_loader)
+        should_log_step = logger.should_log(global_step)
+        train_loss = None
+        train_loss_local = torch.zeros((), device=device, dtype=torch.float32)
         # accumulate across microbatches in case we are running with fewer than 8 gpus
         assert len(inputs) % mbs == 0
         for i in range(len(inputs) // mbs):
-            model(inputs[i*mbs:(i+1)*mbs], targets[i*mbs:(i+1)*mbs]).backward()
+            loss = model(inputs[i*mbs:(i+1)*mbs], targets[i*mbs:(i+1)*mbs])
+            if should_log_step:
+                train_loss_local += loss.detach().float()
+            loss.backward()
         for name, p in model.named_parameters():
             assert p.grad is not None, name
             dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+        if should_log_step:
+            dist.all_reduce(train_loss_local, op=dist.ReduceOp.SUM)
+            train_loss = (train_loss_local / batch_size).item()
         # set optimization hyperparameters and take a step
         set_hparams(step)
+        if should_log_step:
+            log_metrics = {
+                "trial": trial_idx,
+                "train/loss": train_loss,
+                "grad/global_l2": grad_l2_norm(model.parameters()),
+                "grad/matrix_l2": grad_l2_norm(p for p in model.blocks.parameters() if p.ndim >= 2),
+                "progress/step": step,
+                "progress/tokens_seen": (trial_idx * train_steps + step + 1) * batch_size,
+            }
+            log_metrics.update(collect_lrs(optimizer1, optimizer2))
+            log_metrics.update(collect_activation_metrics(model))
+            logger.log(global_step, log_metrics)
         for opt in optimizers:
             opt.step()
         model.zero_grad(set_to_none=True)
@@ -350,4 +455,5 @@ for _ in range(num_trials):
         print0(f"step:{step+1}/{train_steps} train_time:{approx_training_time:.3f}s"
                + f" step_avg:{1000*approx_training_time/(step + 1):.2f}ms", console=True, log=False)
 
+logger.finish()
 dist.destroy_process_group()
