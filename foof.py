@@ -119,9 +119,9 @@ def foof_update(
 
 def collect_foof_named_params(model):
     out = []
-    for module_name, module in model.named_modules():
-        if isinstance(module, HookedLinear) and module_name.startswith("blocks"):
-            out.append((module_name, module.weight))
+    for _, module in model.named_modules():
+        if isinstance(module, HookedLinear):
+            out.append((module, module.weight))
     return out
 
 
@@ -132,6 +132,9 @@ class FOOF(torch.optim.Optimizer):
         params = [p for _, p in named_params]
         params = sorted(params, key=lambda x: x.size(), reverse=True)
         self.param_to_module = {p: module for module, p in named_params}
+        for module, _ in named_params:
+            if not isinstance(module, HookedLinear):
+                raise TypeError("FOOF expects (HookedLinear, parameter) pairs")
         defaults = dict(
             lr=config.lr,
             weight_decay=config.weight_decay,
