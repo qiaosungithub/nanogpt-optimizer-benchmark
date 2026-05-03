@@ -1,9 +1,0 @@
-export WANDB_API_KEY="your_wandb_api_key"
-
-# Optional
-# export WANDB_PROJECT="nanogpt-optimizer-benchmark"
-# export WANDB_ENTITY="your_team_or_username"
-# export WANDB_TAGS="foof,baseline"
-# export WANDB_RUN_NAME="muon-lr-0025"
-# export LOG_PER_STEP=100
-# export WANDB_ENABLE=1

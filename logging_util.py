@@ -40,12 +40,14 @@ class ExperimentLogger:
         entity = os.environ.get("WANDB_ENTITY")
         tags = [t.strip() for t in os.environ.get("WANDB_TAGS", "").split(",") if t.strip()]
         run_name = os.environ.get("WANDB_RUN_NAME")
+        notes = os.environ.get("WANDB_NOTES")
         wandb.init(
             project=project,
             entity=entity or None,
             name=run_name,
             tags=tags,
             config=run_config,
+            notes=notes,
         )
         self._wandb = wandb
 

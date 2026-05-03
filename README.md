@@ -1,3 +1,10 @@
+run in bash:
+```
+cd /data/scratch-oc40/sqa/work/nanogpt-optimizer-benchmark && DATA_ROOT=/data/scratch-oc40/sqa/work SBATCH_GPUS=8 ./run_h200.sh he muon
+```
+
+set hyperparameters in run_muon.sh and run_foof.sh
+
 # Modded-NanoGPT Optimization Benchmark
 
 The goal of this benchmark is to collaboratively|competitively find efficient neural network optimizers.
