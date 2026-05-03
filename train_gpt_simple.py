@@ -257,6 +257,12 @@ dist.barrier()
 # this code can be run equivalently with 1, 2, 4, or 8 gpus.
 assert 8 % dist.get_world_size() == 0
 
+seed = env_int("SEED", 1337)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
 # logging setup
 if dist.get_rank() == 0:
     os.makedirs("logs", exist_ok=True)
@@ -294,6 +300,7 @@ if len(sys.argv) > 1 and sys.argv[-1].strip() != "":
 matrix_opt = load_matrix_optimizer_name()
 train_steps = 3375
 run_config = {
+    "seed": seed,
     "matrix_opt": matrix_opt,
     "world_size": dist.get_world_size(),
     "batch_size": batch_size,
