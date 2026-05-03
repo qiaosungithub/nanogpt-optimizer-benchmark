@@ -15,6 +15,96 @@ torchrun --standalone --nproc_per_node=$(nvidia-smi -L | wc -l) records/track_3_
 
 Note: [Beware that](https://github.com/KellerJordan/modded-nanogpt/issues/268) on A100, using `torch==2.10` with `torch.compile` enabled will lead to `nan`s.
 
+## This Repo Layout
+
+This standalone repo contains only `records/track_3_optimization` from `modded-nanogpt`, so it is easier to iterate on optimizer ideas without unrelated code.
+
+- `train_gpt_simple.py`: baseline trainer + optimizer selection logic.
+- `foof.py`: PyTorch implementations of `FOOF` and `Muon` matrix optimizers, plus `HookedLinear` activation-stat hooks.
+- `run_foof.sh`: convenience launcher for FOOF experiments.
+- `run_muon.sh`: convenience launcher for Muon experiments.
+- `results/`: logs and run artifacts.
+
+## Optimizer Choice (Muon or FOOF)
+
+The trainer uses two optimizers:
+
+- `AdamW` for embedding/output/bias/norm-like parameters.
+- A matrix optimizer (`Muon` or `FOOF`) for 2D parameters in transformer blocks.
+
+Select matrix optimizer via env var:
+
+```bash
+MATRIX_OPT=foof  # default
+MATRIX_OPT=muon
+```
+
+If unset, `MATRIX_OPT` defaults to `foof`.
+
+## Running Experiments
+
+Run FOOF:
+
+```bash
+./run_foof.sh
+```
+
+Run Muon:
+
+```bash
+./run_muon.sh
+```
+
+Both scripts auto-detect GPU count (`NPROC_PER_NODE`) and call `torchrun`.
+
+## Config via Environment Variables
+
+### FOOF config
+
+`run_foof.sh` builds `FOOF_CONFIG` JSON and exports `MATRIX_OPT=foof`.
+
+Override defaults directly in shell:
+
+```bash
+FOOF_LR=0.02 FOOF_WEIGHT_DECAY=0.02 FOOF_FW_STEPS=6 ./run_foof.sh
+```
+
+Default FOOF values:
+
+- `lr=0.025`
+- `weight_decay=0.025`
+- `beta=0.95`
+- `fw_steps=4`
+- `alpha_mult=1.0`
+- `nesterov=true`
+- `eps=1e-12`
+
+### Muon config
+
+`run_muon.sh` builds `MUON_CONFIG` JSON and exports `MATRIX_OPT=muon`.
+
+Override defaults directly in shell:
+
+```bash
+MUON_LR=0.02 MUON_WEIGHT_DECAY=0.02 MUON_MU=0.95 ./run_muon.sh
+```
+
+Default Muon values:
+
+- `lr=0.025`
+- `weight_decay=0.025`
+- `mu=0.95`
+- `nesterov=true`
+
+## FOOF Activation Statistics
+
+`FOOF` needs activation mean and covariance per dense layer. This is implemented in `HookedLinear` inside `foof.py`:
+
+- captures `E[x]` as `_input_mean`
+- captures `E[xx^T]` as `_input_cov_full`
+
+`FOOF.step()` reads these cached tensors and falls back to Muon-style update when stats are unavailable.
+
 ## Notable results history
 
 The following results each improved the best known hyperparameters for an optimizer on this benchmark.
