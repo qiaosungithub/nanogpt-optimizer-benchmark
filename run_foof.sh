@@ -24,8 +24,10 @@ FOOF_FW_STEPS=4                                 # default 4
 FOOF_ALPHA_MULT=1.0                             # default 1.0
 FOOF_NESTEROV=true                              # default true
 FOOF_EPS=1e-12                                  # default 1e-12
+FOOF_FW_NS_VARIANT=basic                        # default poly5
+FOOF_FW_NS_STEPS=12                             # default 12
 
-export FOOF_CONFIG="{\"lr\":${FOOF_LR},\"weight_decay\":${FOOF_WEIGHT_DECAY},\"beta\":${FOOF_BETA},\"fw_steps\":${FOOF_FW_STEPS},\"alpha_mult\":${FOOF_ALPHA_MULT},\"nesterov\":${FOOF_NESTEROV},\"eps\":${FOOF_EPS}}"
+export FOOF_CONFIG="{\"lr\":${FOOF_LR},\"weight_decay\":${FOOF_WEIGHT_DECAY},\"beta\":${FOOF_BETA},\"fw_steps\":${FOOF_FW_STEPS},\"alpha_mult\":${FOOF_ALPHA_MULT},\"nesterov\":${FOOF_NESTEROV},\"eps\":${FOOF_EPS},\"fw_ns_variant\":\"${FOOF_FW_NS_VARIANT}\",\"fw_ns_steps\":${FOOF_FW_NS_STEPS}}"
 export MATRIX_OPT="foof"
 export WANDB_NOTES="FooF baseline, lr 0.015, wd 0.025, FW 4 iters"
 
