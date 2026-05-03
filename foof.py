@@ -31,6 +31,14 @@ class FoofConfig:
     eps: float = 1e-12
 
 
+@dataclass
+class MuonConfig:
+    lr: float = 0.025
+    weight_decay: float = 0.025
+    mu: float = 0.95
+    nesterov: bool = True
+
+
 def zeropower_via_newtonschulz5(G: Tensor) -> Tensor:
     assert G.ndim >= 2
     X = G.bfloat16()
@@ -177,6 +185,45 @@ class FOOF(torch.optim.Optimizer):
                             alpha_mult=group["alpha_mult"],
                             eps=group["eps"],
                         )
+                    p.mul_(1 - group["lr"] * group["weight_decay"])
+                    p.add_(update, alpha=-group["lr"])
+                dist.all_gather(params_pad[base_i:base_i + world_size], params_pad[base_i + rank])
+
+
+class Muon(torch.optim.Optimizer):
+    def __init__(self, params, config: MuonConfig):
+        params = list(params)
+        assert len(params) >= 1
+        params = sorted(params, key=lambda x: x.size(), reverse=True)
+        defaults = dict(
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            mu=config.mu,
+            nesterov=config.nesterov,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self):
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        for group in self.param_groups:
+            params = group["params"]
+            params_pad = params + [torch.empty_like(params[-1])] * (world_size - len(params) % world_size)
+            for base_i in range(0, len(params), world_size):
+                if base_i + rank < len(params):
+                    p = params[base_i + rank]
+                    if p.grad is None:
+                        continue
+                    state = self.state[p]
+                    if len(state) == 0:
+                        state["momentum"] = torch.zeros_like(p)
+                    update = muon_update(
+                        p.grad,
+                        state["momentum"],
+                        mu=group["mu"],
+                        nesterov=group["nesterov"],
+                    )
                     p.mul_(1 - group["lr"] * group["weight_decay"])
                     p.add_(update, alpha=-group["lr"])
                 dist.all_gather(params_pad[base_i:base_i + world_size], params_pad[base_i + rank])

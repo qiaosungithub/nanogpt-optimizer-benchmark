@@ -21,6 +21,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from foof import FOOF, FoofConfig, HookedLinear, collect_foof_named_params
+from foof import Muon, MuonConfig
 
 
 def load_foof_config() -> FoofConfig:
@@ -29,6 +30,18 @@ def load_foof_config() -> FoofConfig:
         return FoofConfig()
     data = json.loads(raw)
     return FoofConfig(**data)
+
+
+def load_muon_config() -> MuonConfig:
+    raw = os.environ.get("MUON_CONFIG")
+    if raw is None:
+        return MuonConfig()
+    data = json.loads(raw)
+    return MuonConfig(**data)
+
+
+def load_matrix_optimizer_name() -> str:
+    return os.environ.get("MATRIX_OPT", "foof").strip().lower()
 
 
 ########################################
@@ -247,8 +260,18 @@ for _ in range(num_trials):
                         dict(params=[model.proj.weight], lr=1/320),
                         dict(params=[p for p in model.parameters() if p.ndim < 2], lr=0.01)],
                        betas=(0.8, 0.95), eps=1e-10, weight_decay=0, fused=True)
-    foof_config = load_foof_config()
-    optimizer2 = FOOF(collect_foof_named_params(model), config=foof_config)
+    matrix_opt = load_matrix_optimizer_name()
+    if matrix_opt == "foof":
+        foof_config = load_foof_config()
+        optimizer2 = FOOF(collect_foof_named_params(model), config=foof_config)
+    elif matrix_opt == "muon":
+        muon_config = load_muon_config()
+        optimizer2 = Muon(
+            [p for p in model.blocks.parameters() if p.ndim >= 2],
+            config=muon_config,
+        )
+    else:
+        raise ValueError(f"Unsupported MATRIX_OPT={matrix_opt}. Expected 'foof' or 'muon'.")
     optimizers = [optimizer1, optimizer2]
     assert set(p for opt in optimizers for group in opt.param_groups
                for p in group["params"]) == set(model.parameters())
